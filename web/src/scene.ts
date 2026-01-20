@@ -8,6 +8,15 @@ export interface TerminalPanel {
   texture: THREE.CanvasTexture;
 }
 
+interface FocusAnimation {
+  startPosition: THREE.Vector3;
+  targetPosition: THREE.Vector3;
+  startTarget: THREE.Vector3;
+  endTarget: THREE.Vector3;
+  progress: number;
+  duration: number;
+}
+
 export class WatchtowerScene {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
@@ -15,6 +24,15 @@ export class WatchtowerScene {
   private controls: OrbitControls;
   private panels: Map<string, TerminalPanel> = new Map();
   private sphereRadius = 10;
+
+  // Click-to-focus state
+  private raycaster = new THREE.Raycaster();
+  private mouse = new THREE.Vector2();
+  private focusedPanel: TerminalPanel | null = null;
+  private focusAnimation: FocusAnimation | null = null;
+  private readonly focusDistance = 3;
+  private readonly animationDuration = 500; // ms
+  private lastTime = performance.now();
 
   constructor(container: HTMLElement) {
     // Scene setup
@@ -51,6 +69,110 @@ export class WatchtowerScene {
 
     // Handle window resize
     window.addEventListener('resize', () => this.onResize(container));
+
+    // Click handler for focus/zoom
+    this.renderer.domElement.addEventListener('click', (event) => this.onClick(event));
+
+    // Escape key to unfocus
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && this.focusedPanel) {
+        this.unfocus();
+      }
+    });
+  }
+
+  private onClick(event: MouseEvent): void {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+
+    const meshes = Array.from(this.panels.values()).map(p => p.mesh);
+    const intersects = this.raycaster.intersectObjects(meshes);
+
+    if (intersects.length > 0) {
+      const clickedMesh = intersects[0].object as THREE.Mesh;
+      const panel = Array.from(this.panels.values()).find(p => p.mesh === clickedMesh);
+
+      if (panel) {
+        if (this.focusedPanel === panel) {
+          // Clicking focused panel unfocuses
+          this.unfocus();
+        } else {
+          // Focus on the clicked panel
+          this.focusOn(panel);
+        }
+      }
+    } else if (this.focusedPanel) {
+      // Clicking empty space unfocuses
+      this.unfocus();
+    }
+  }
+
+  private focusOn(panel: TerminalPanel): void {
+    this.focusedPanel = panel;
+    this.controls.enabled = false;
+
+    // Calculate position in front of the panel
+    const panelPosition = panel.mesh.position.clone();
+    const direction = panelPosition.clone().normalize();
+    const targetPosition = direction.multiplyScalar(this.sphereRadius - this.focusDistance);
+
+    this.focusAnimation = {
+      startPosition: this.camera.position.clone(),
+      targetPosition,
+      startTarget: this.controls.target.clone(),
+      endTarget: panelPosition.clone(),
+      progress: 0,
+      duration: this.animationDuration,
+    };
+  }
+
+  private unfocus(): void {
+    if (!this.focusedPanel) return;
+
+    // Animate back to center
+    this.focusAnimation = {
+      startPosition: this.camera.position.clone(),
+      targetPosition: new THREE.Vector3(0, 0, 0.1),
+      startTarget: this.controls.target.clone(),
+      endTarget: new THREE.Vector3(0, 0, 0),
+      progress: 0,
+      duration: this.animationDuration,
+    };
+
+    this.focusedPanel = null;
+  }
+
+  private updateFocusAnimation(deltaTime: number): void {
+    if (!this.focusAnimation) return;
+
+    this.focusAnimation.progress += deltaTime;
+    const t = Math.min(this.focusAnimation.progress / this.focusAnimation.duration, 1);
+
+    // Ease out cubic for smooth deceleration
+    const eased = 1 - Math.pow(1 - t, 3);
+
+    this.camera.position.lerpVectors(
+      this.focusAnimation.startPosition,
+      this.focusAnimation.targetPosition,
+      eased
+    );
+
+    this.controls.target.lerpVectors(
+      this.focusAnimation.startTarget,
+      this.focusAnimation.endTarget,
+      eased
+    );
+
+    if (t >= 1) {
+      this.focusAnimation = null;
+      if (!this.focusedPanel) {
+        // Re-enable controls when unfocused
+        this.controls.enabled = true;
+      }
+    }
   }
 
   private onResize(container: HTMLElement): void {
@@ -136,6 +258,11 @@ export class WatchtowerScene {
   }
 
   render(): void {
+    const now = performance.now();
+    const deltaTime = now - this.lastTime;
+    this.lastTime = now;
+
+    this.updateFocusAnimation(deltaTime);
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
