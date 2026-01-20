@@ -6,10 +6,10 @@ import (
 
 func TestParsePaneLine(t *testing.T) {
 	tests := []struct {
-		name    string
-		line    string
-		want    PaneInfo
-		wantOK  bool
+		name   string
+		line   string
+		want   PaneInfo
+		wantOK bool
 	}{
 		{
 			name: "valid line",
